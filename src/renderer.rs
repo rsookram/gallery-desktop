@@ -1,6 +1,9 @@
 use std::io::Cursor;
 
-use skia_safe::{codec::jpeg_decoder, ISize, Paint, Rect, SamplingOptions};
+use skia_safe::{
+    codec::{jpeg_decoder, png_decoder, webp_decoder},
+    ISize, Paint, Rect, SamplingOptions,
+};
 
 use crate::file::FileContainer;
 
@@ -14,8 +17,20 @@ pub struct State {
 pub fn render_frame(state: &mut State, canvas: &skia_safe::Canvas) {
     let image_bytes = state.file.read_at(state.index);
 
-    let mut c = Cursor::new(image_bytes);
-    let mut codec = jpeg_decoder::decode_stream(&mut c).unwrap();
+    let mut c = Cursor::new(&image_bytes);
+
+    let mut codec = if image_bytes.starts_with(b"\xFF\xD8\xFF") {
+        jpeg_decoder::decode_stream(&mut c).unwrap()
+    } else if image_bytes.starts_with(b"\x89PNG\x0D\x0A\x1A\x0A") {
+        png_decoder::decode_stream(&mut c).unwrap()
+    } else if image_bytes.len() > b"RIFF\0\0\0\0WEBPVP".len()
+        && image_bytes.starts_with(b"RIFF")
+        && &image_bytes[8..][..6] == b"WEBPVP"
+    {
+        webp_decoder::decode_stream(&mut c).unwrap()
+    } else {
+        panic!("unsupported file type");
+    };
 
     let image = codec.get_image(codec.info(), None).unwrap();
     let info = codec.info();

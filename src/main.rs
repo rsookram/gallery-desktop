@@ -1,7 +1,7 @@
 use std::{env::args_os, ffi::CString, num::NonZeroU32, path::PathBuf};
 
 use file::FileContainer;
-use gl::types::*;
+use gl::types::GLint;
 use glutin::{
     config::{ConfigTemplateBuilder, GlConfig},
     context::{ContextAttributesBuilder, PossiblyCurrentContext},
