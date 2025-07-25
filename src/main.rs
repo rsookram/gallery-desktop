@@ -1,6 +1,5 @@
 use std::{env::args_os, ffi::CString, num::NonZeroU32, path::PathBuf};
 
-use file::FileContainer;
 use gl::types::GLint;
 use glutin::{
     config::{ConfigTemplateBuilder, GlConfig},
@@ -15,6 +14,7 @@ use skia_safe::{
     gpu::{self, backend_render_targets, gl::FramebufferInfo, SurfaceOrigin},
     Color, ColorType, Surface,
 };
+use state::State;
 use winit::{
     application::ApplicationHandler,
     event::{KeyEvent, Modifiers, WindowEvent},
@@ -24,9 +24,17 @@ use winit::{
 
 mod file;
 mod renderer;
+mod state;
 
 fn main() {
-    let path = args_os().nth(1).unwrap();
+    let mut args = args_os();
+    args.next();
+
+    let paths = args.map(PathBuf::from).collect::<Vec<_>>();
+    if paths.is_empty() {
+        eprintln!("no files provided");
+        return;
+    }
 
     let el = EventLoop::new().expect("Failed to create event loop");
 
@@ -173,12 +181,7 @@ fn main() {
         window,
     };
 
-    let state = renderer::State {
-        width: 0,
-        height: 0,
-        file: FileContainer::open(&PathBuf::from(path)),
-        index: 0,
-    };
+    let state = State::new(paths);
 
     struct Application {
         env: Env,
@@ -186,7 +189,7 @@ fn main() {
         num_samples: usize,
         stencil_size: usize,
         modifiers: Modifiers,
-        state: renderer::State,
+        state: State,
     }
 
     let mut application = Application {
@@ -255,10 +258,19 @@ fn main() {
                     }
 
                     if logical_key == "j" && state.is_pressed() {
-                        self.state.index = (self.state.index + 1).min(self.state.file.len() - 1);
+                        self.state.next_image();
                         self.env.window.request_redraw();
                     } else if logical_key == "k" && state.is_pressed() {
-                        self.state.index = self.state.index.saturating_sub(1);
+                        self.state.previous_image();
+                        self.env.window.request_redraw();
+                    } else if logical_key == "l" && state.is_pressed() {
+                        self.state.previous_file();
+                        self.env.window.request_redraw();
+                    } else if logical_key == "h" && state.is_pressed() {
+                        self.state.next_file();
+                        self.env.window.request_redraw();
+                    } else if logical_key == "p" && state.is_pressed() {
+                        self.state.show_progress = !self.state.show_progress;
                         self.env.window.request_redraw();
                     }
                 }

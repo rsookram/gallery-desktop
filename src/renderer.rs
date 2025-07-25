@@ -2,20 +2,13 @@ use std::io::Cursor;
 
 use skia_safe::{
     codec::{jpeg_decoder, png_decoder, webp_decoder},
-    ISize, Paint, Rect, SamplingOptions,
+    Color, ISize, Paint, Rect, SamplingOptions,
 };
 
-use crate::file::FileContainer;
-
-pub struct State {
-    pub width: i32,
-    pub height: i32,
-    pub file: FileContainer,
-    pub index: usize,
-}
+use crate::state::State;
 
 pub fn render_frame(state: &mut State, canvas: &skia_safe::Canvas) {
-    let image_bytes = state.file.read_at(state.index);
+    let image_bytes = state.current_image_bytes();
 
     let mut c = Cursor::new(&image_bytes);
 
@@ -71,4 +64,28 @@ pub fn render_frame(state: &mut State, canvas: &skia_safe::Canvas) {
         },
         &Paint::default(),
     );
+
+    if state.show_progress {
+        render_progress(
+            state.current_file.index,
+            state.current_file.file.len(),
+            canvas,
+        );
+    }
+}
+
+fn render_progress(index: usize, len: usize, canvas: &skia_safe::Canvas) {
+    let progress = index * 10 / len; // out of 10
+
+    let mut paint = Paint::default();
+    paint.set_color(Color::WHITE);
+
+    const RADIUS: f32 = 16.0;
+    const SPACING: f32 = 8.0;
+
+    for i in 0..progress {
+        let top_offset = (2.0 * RADIUS + SPACING) * (1 + i / 3) as f32;
+        let left_offset = (2.0 * RADIUS + SPACING) * (1 + i % 3) as f32;
+        canvas.draw_circle((left_offset, top_offset), RADIUS, &paint);
+    }
 }
