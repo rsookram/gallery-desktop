@@ -1,4 +1,4 @@
-use std::{env::args_os, ffi::CString, num::NonZeroU32, path::PathBuf};
+use std::{env::args_os, ffi::CString, num::NonZeroU32};
 
 use gl::types::GLint;
 use glutin::{
@@ -11,27 +11,30 @@ use glutin::{
 use glutin_winit::DisplayBuilder;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use skia_safe::{
-    gpu::{self, backend_render_targets, gl::FramebufferInfo, SurfaceOrigin},
     Color, ColorType, Surface,
+    gpu::{self, SurfaceOrigin, backend_render_targets, gl::FramebufferInfo},
 };
 use state::State;
 use winit::{
     application::ApplicationHandler,
-    event::{KeyEvent, Modifiers, WindowEvent},
+    dpi::PhysicalPosition,
+    event::{ElementState, KeyEvent, Modifiers, MouseButton, WindowEvent},
     event_loop::EventLoop,
+    keyboard::{Key, NamedKey},
     window::{Window, WindowAttributes},
 };
 
-mod file;
-mod renderer;
+mod file_container;
+mod selector;
 mod state;
+mod viewer;
 
 fn main() {
     let mut args = args_os();
     args.next();
 
-    let paths = args.map(PathBuf::from).collect::<Vec<_>>();
-    if paths.is_empty() {
+    let args = args.collect::<Vec<_>>();
+    if args.is_empty() {
         eprintln!("no files provided");
         return;
     }
@@ -42,7 +45,7 @@ fn main() {
         .with_decorations(false)
         .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
 
-    let template = ConfigTemplateBuilder::new().with_alpha_size(8);
+    let template = ConfigTemplateBuilder::new();
 
     let display_builder = DisplayBuilder::new().with_window_attributes(window_attributes.into());
     let (window, gl_config) = display_builder
@@ -181,14 +184,13 @@ fn main() {
         window,
     };
 
-    let state = State::new(paths);
-
     struct Application {
         env: Env,
         fb_info: FramebufferInfo,
         num_samples: usize,
         stencil_size: usize,
         modifiers: Modifiers,
+        mouse_position: PhysicalPosition<f64>,
         state: State,
     }
 
@@ -198,7 +200,8 @@ fn main() {
         num_samples,
         stencil_size,
         modifiers: Modifiers::default(),
-        state,
+        mouse_position: PhysicalPosition { x: 0.0, y: 0.0 },
+        state: State::new(args),
     };
 
     impl ApplicationHandler for Application {
@@ -217,7 +220,6 @@ fn main() {
             _window_id: winit::window::WindowId,
             event: WindowEvent,
         ) {
-            //println!("window_event {event:?}");
             let mut draw_frame = false;
 
             match event {
@@ -256,23 +258,63 @@ fn main() {
                     if self.modifiers.state().super_key() && logical_key == "q" {
                         event_loop.exit();
                     }
-
-                    if logical_key == "j" && state.is_pressed() {
-                        self.state.next_image();
-                        self.env.window.request_redraw();
-                    } else if logical_key == "k" && state.is_pressed() {
-                        self.state.previous_image();
-                        self.env.window.request_redraw();
-                    } else if logical_key == "l" && state.is_pressed() {
-                        self.state.previous_file();
-                        self.env.window.request_redraw();
-                    } else if logical_key == "h" && state.is_pressed() {
-                        self.state.next_file();
-                        self.env.window.request_redraw();
-                    } else if logical_key == "p" && state.is_pressed() {
-                        self.state.show_progress = !self.state.show_progress;
-                        self.env.window.request_redraw();
+                    if !state.is_pressed() {
+                        return;
                     }
+
+                    match &mut self.state.screen {
+                        state::Screen::Selector(_) => {
+                            if logical_key != Key::Named(NamedKey::Enter) {
+                                return;
+                            }
+
+                            self.state.move_to_viewer();
+                        }
+                        state::Screen::Viewer(screen) => {
+                            if logical_key == "j" {
+                                screen.next_image();
+                            } else if logical_key == "k" {
+                                screen.previous_image();
+                            } else if logical_key == "l" {
+                                screen.previous_file();
+                            } else if logical_key == "h" {
+                                screen.next_file();
+                            } else if logical_key == "p" {
+                                screen.toggle_progress_display();
+                            } else {
+                                return;
+                            }
+                        }
+                    }
+
+                    self.env.window.request_redraw();
+                }
+                WindowEvent::CursorMoved { position, .. } => {
+                    self.mouse_position = position;
+                }
+                WindowEvent::MouseInput { state, button, .. } => {
+                    if state != ElementState::Pressed {
+                        return;
+                    }
+                    let state::Screen::Selector(screen) = &mut self.state.screen else {
+                        return;
+                    };
+
+                    match button {
+                        MouseButton::Left => {
+                            let PhysicalPosition { x, y } = self.mouse_position;
+                            screen.on_click(x, y, self.state.width, self.state.height);
+                        }
+                        MouseButton::Back => {
+                            screen.previous_page();
+                        }
+                        MouseButton::Forward => {
+                            screen.next_page();
+                        }
+                        _ => return,
+                    }
+
+                    self.env.window.request_redraw();
                 }
                 WindowEvent::RedrawRequested => {
                     draw_frame = true;
@@ -283,7 +325,15 @@ fn main() {
             if draw_frame {
                 let canvas = self.env.surface.canvas();
                 canvas.clear(Color::BLACK);
-                renderer::render_frame(&mut self.state, canvas);
+
+                match &mut self.state.screen {
+                    state::Screen::Selector(screen) => {
+                        selector::render_frame(self.state.width, self.state.height, screen, canvas)
+                    }
+                    state::Screen::Viewer(screen) => {
+                        viewer::render_frame(self.state.width, self.state.height, screen, canvas);
+                    }
+                }
                 self.env.gr_context.flush_and_submit();
                 self.env
                     .gl_surface
